@@ -294,3 +294,85 @@ def son_algorithm(
         "num_chunks"        : len(chunks),
         "local_support"     : local_support,
     }
+
+
+def son_mapreduce(
+    baskets:           list[set],
+    support_threshold: int,
+    num_chunks:        int = 10,
+    num_hash_tables:   int = 2,
+    num_buckets:       int | None = None,
+) -> dict:
+ 
+    n          = len(baskets)
+    chunk_size = max(1, n // num_chunks)
+    p          = chunk_size / n
+ 
+    local_support = max(1, int(math.floor(p * support_threshold)))
+ 
+    chunks = [
+        baskets[i : i + chunk_size]
+        for i in range(0, n, chunk_size)
+    ]
+ 
+    # MapReduce Job 1
+ 
+    # PHASE 1 — MAP
+    phase1_mapped: list[list[tuple[frozenset, int]]] = []
+ 
+    for chunk in chunks:
+        if not chunk:
+            continue
+        local_frequent = multihash_algorithm(
+            chunk,
+            support=local_support,
+            num_hash_tables=num_hash_tables,
+            num_buckets=num_buckets,
+        )
+        phase1_mapped.append([(itemset, 1) for itemset in local_frequent])
+ 
+    # PHASE 1 — REDUCE
+    all_candidates: set[frozenset] = set()
+ 
+    for kv_pairs in phase1_mapped:
+        for itemset, _ in kv_pairs:
+            all_candidates.add(itemset)
+ 
+    # MapReduce Job 2
+ 
+    # PHASE 2 — MAP
+    phase2_mapped: list[list[tuple[frozenset, int]]] = []
+ 
+    for chunk in chunks:
+        local_counts: dict[frozenset, int] = defaultdict(int)
+        for basket in chunk:
+            basket_set = frozenset(basket)
+            for candidate in all_candidates:
+                if candidate <= basket_set:
+                    local_counts[candidate] += 1
+        phase2_mapped.append(
+            [(candidate, count) for candidate, count in local_counts.items() if count > 0]
+        )
+ 
+    # PHASE 2 — REDUCE
+    global_counts: dict[frozenset, int] = defaultdict(int)
+ 
+    for kv_pairs in phase2_mapped:
+        for candidate, count in kv_pairs:
+            global_counts[candidate] += count
+ 
+    frequent_itemsets = {
+        c for c, cnt in global_counts.items()
+        if cnt >= support_threshold
+    }
+ 
+    false_positives = all_candidates - frequent_itemsets
+ 
+    return {
+        "frequent_itemsets" : frequent_itemsets,
+        "candidates"        : all_candidates,
+        "global_counts"     : dict(global_counts),
+        "false_positives"   : false_positives,
+        "num_chunks"        : len(chunks),
+        "local_support"     : local_support,
+    }

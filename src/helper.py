@@ -12,7 +12,7 @@ def kaggle_data_handler(kaggle_url, csv_index=0):
     owner, slug = match.group(1), match.group(2)
 
     try:
-        download_dir = Path(__file__).parent / "data"
+        download_dir = Path(__file__).parent.parent / "data"
     except NameError:
         download_dir = Path.cwd() / "data"
 
