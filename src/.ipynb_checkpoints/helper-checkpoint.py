@@ -69,3 +69,41 @@ def print_results(result: dict, top_n: int = 20) -> None:
         if len(items_at_size) > top_n:
             print(f"    ... and {len(items_at_size) - top_n} more")
         print()
+        
+        
+        
+def generate_association_rules(
+    frequent_itemsets,          
+    global_counts=None,         
+) -> pd.DataFrame:
+    
+    if isinstance(frequent_itemsets, dict):
+        counts = frequent_itemsets
+        itemsets = set(frequent_itemsets.keys())
+    else:
+        if global_counts is None:
+            raise ValueError("global_counts must be provided when frequent_itemsets is a set")
+        counts = global_counts
+        itemsets = set(frequent_itemsets)
+
+    rules = []
+    for itemset in itemsets:
+        if len(itemset) < 2:
+            continue
+        for item in itemset:
+            rhs = frozenset([item])
+            lhs = itemset - rhs
+            if lhs not in counts:
+                continue
+            support = counts[itemset]
+            confidence = support / counts[lhs]
+            rules.append({
+                "antecedents": set(lhs),
+                "consequents": set(rhs),
+                "support":     support,
+                "confidence":  round(confidence * 100, 2),
+            })
+
+    df = pd.DataFrame(rules, columns=["antecedents", "consequents", "support", "confidence"])
+    df = df.sort_values("confidence", ascending=False).reset_index(drop=True)
+    return df

@@ -54,7 +54,6 @@ def triples_method(baskets):
     return triples
 
 
-
 def apriori(baskets, support_threshold):
 
     print("Pass 1 : Calculation occureness of items")
@@ -65,17 +64,13 @@ def apriori(baskets, support_threshold):
 
     print('Occureness of Items:', singleton_counts)
 
-
-    # -------------------------
-    # BETWEEN PASSES: Constructing L1
-    # -------------------------
     L1 = {frozenset([item]) for item, count in singleton_counts.items() if count >= support_threshold}
 
     print(f"\n=== BETWEEN PASSES: L1 (frequent singletons, support >= {support_threshold}) ===")
     print(f"  {[set(s) for s in L1]}\n")
 
     if not L1:
-        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence"])
+        return {}
 
     frequent_itemsets = {1: L1}
     support_counts = {frozenset([item]): count for item, count in singleton_counts.items() if count >= support_threshold}
@@ -115,29 +110,7 @@ def apriori(baskets, support_threshold):
         frequent_itemsets[k] = Lk
         k += 1
 
-    rules = []
-    for k, Lk in frequent_itemsets.items():
-        if k < 2:
-            continue
-        for itemset in Lk:
-            for item in itemset:
-                lhs = itemset - {item}
-                rhs = frozenset([item])
-                conf = support_counts[itemset] / support_counts[lhs]
-                rules.append({
-                    "antecedents": set(lhs),
-                    "consequents": set(rhs),
-                    "support": support_counts[itemset],
-                    "confidence": round(conf * 100, 2)
-                })
-
-    df_rules = pd.DataFrame(rules, columns=["antecedents", "consequents", "support", "confidence"])
-    df_rules = df_rules.sort_values("confidence", ascending=False).reset_index(drop=True)
-
-    print("=== ASSOCIATION RULES ===")
-    print(df_rules.to_string(index=False))
-
-    return df_rules
+    return support_counts
 
 
 
