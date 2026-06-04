@@ -44,7 +44,11 @@ def print_results(result: dict, top_n: int = 20) -> None:
     print("=" * 60)
     print("Results")
     print("=" * 60)
-    print(f"  Chunks used : {result['num_chunks']}")
+    effective = result.get("effective_chunks", result["num_chunks"])
+    if effective < result["num_chunks"]:
+        print(f"  Chunks used : {effective} (capped from {result['num_chunks']} — support too low)")
+    else:
+        print(f"  Chunks used : {result['num_chunks']}")
     print(f"  Local support : {result['local_support']}")
     print(f"  Candidate itemsets : {len(cands)}")
     print(f"  False positives : {len(fp)}  (eliminated in pass 2)")

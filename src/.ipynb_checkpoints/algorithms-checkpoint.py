@@ -54,20 +54,20 @@ def triples_method(baskets):
     return triples
 
 
-def apriori(baskets, support_threshold):
+def apriori(baskets, support_threshold, verbose=False):
 
-    print("Pass 1 : Calculation occureness of items")
+    if verbose: print("Pass 1 : Calculation occureness of items")
     singleton_counts = {}
     for basket in baskets:
         for item in basket:
             singleton_counts[item] = singleton_counts.get(item, 0) + 1
 
-    print('Occureness of Items:', singleton_counts)
+    if verbose: print('Occureness of Items:', singleton_counts)
 
     L1 = {frozenset([item]) for item, count in singleton_counts.items() if count >= support_threshold}
 
-    print(f"\n=== BETWEEN PASSES: L1 (frequent singletons, support >= {support_threshold}) ===")
-    print(f"  {[set(s) for s in L1]}\n")
+    if verbose: print(f"\n=== BETWEEN PASSES: L1 (frequent singletons, support >= {support_threshold}) ===")
+    if verbose: print(f"  {[set(s) for s in L1]}\n")
 
     if not L1:
         return {}
@@ -91,14 +91,14 @@ def apriori(baskets, support_threshold):
                     key = frozenset(candidate)
                     Ck_counts[key] = Ck_counts.get(key, 0) + 1
 
-        print(f"=== PASS {k}: Candidate itemsets C{k} counts ===")
+        if verbose: print(f"=== PASS {k}: Candidate itemsets C{k} counts ===")
         for itemset, count in sorted(Ck_counts.items(), key=lambda x: x[1], reverse=True):
             print(f"  {set(itemset)}: {count}")
 
         Lk = {itemset for itemset, count in Ck_counts.items() if count >= support_threshold}
 
-        print(f"\n=== BETWEEN PASSES: L{k} (frequent {k}-itemsets, support >= {support_threshold}) ===")
-        print(f"  {[set(s) for s in Lk]}\n")
+        if verbose: print(f"\n=== BETWEEN PASSES: L{k} (frequent {k}-itemsets, support >= {support_threshold}) ===")
+        if verbose: print(f"  {[set(s) for s in Lk]}\n")
 
         if not Lk:
             print(f"  No frequent {k}-itemsets found. Stopping.")
@@ -241,7 +241,7 @@ def multihash_algorithm(
 def son_algorithm(
     baskets:           list[set],
     support_threshold: int,
-    num_chunks:        int = 10,
+    num_chunks:        int = 5,
     num_hash_tables:   int = 2,
     num_buckets:       int | None = None,
 ) -> dict:
@@ -299,7 +299,7 @@ def son_algorithm(
 def son_mapreduce(
     baskets:           list[set],
     support_threshold: int,
-    num_chunks:        int = 10,
+    num_chunks:        int = 5,
     num_hash_tables:   int = 2,
     num_buckets:       int | None = None,
 ) -> dict:
