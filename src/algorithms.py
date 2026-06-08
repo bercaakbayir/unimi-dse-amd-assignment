@@ -8,25 +8,27 @@ from typing import Iterable
 import itertools
 
 
-def triangular_matrix_method(baskets):
-    # Map items to integers 1 -> n
-    all_items = sorted({item for basket in baskets for item in basket})
+def triangular_matrix_method(baskets, item_filter=None):
+    all_items = sorted({
+        item for basket in baskets for item in basket
+        if item_filter is None or item in item_filter
+    })
     item_to_idx = {item: i+1 for i, item in enumerate(all_items)}
     n = len(all_items)
 
-    # 1D array of size n*(n-1)/2
     size = n * (n - 1) // 2
     a = [0] * (size + 1)
 
     def get_index(i, j):
-        # k = (i-1)(n - i/2) + j - i
         if i > j:
             i, j = j, i
         return int((i - 1) * (n - i / 2) + (j - i))
 
-
     for basket in baskets:
-        indices = sorted([item_to_idx[item] for item in basket])
+        indices = sorted([
+            item_to_idx[item] for item in basket
+            if item_filter is None or item in item_filter
+        ])
         for i, j in combinations(indices, 2):
             k = get_index(i, j)
             a[k] += 1
@@ -36,18 +38,20 @@ def triangular_matrix_method(baskets):
         i, j = item_to_idx[item_i], item_to_idx[item_j]
         k = get_index(i, j)
         if a[k] > 0:
-            result[(item_i, item_j)] = a[k]
+            result[frozenset({item_i, item_j})] = a[k]
 
     return result
 
 
-def triples_method(baskets):
-    # Hash table: (i, j) -> count  (i < j)
+def triples_method(baskets, item_filter=None, pair_filter=None):
     triples = {}
 
     for basket in baskets:
-        for item_i, item_j in combinations(sorted(basket), 2):
-            key = (item_i, item_j)
+        items = [item for item in basket if item_filter is None or item in item_filter]
+        for item_i, item_j in combinations(sorted(items), 2):
+            key = frozenset({item_i, item_j})
+            if pair_filter is not None and not pair_filter(key):
+                continue
             triples[key] = triples.get(key, 0) + 1
 
     triples = dict(sorted(triples.items(), key=lambda x: x[1], reverse=True))
@@ -82,18 +86,23 @@ def apriori(baskets, support_threshold, verbose=False):
         Lk_prev = frequent_itemsets[k - 1]
         Ck_counts = {}
 
-        for basket in baskets:
-            frequent_in_basket = [item for item in basket if frozenset([item]) in L1]
+        if k == 2:
+            frequent_items_set = {item for fs in L1 for item in fs}
+            Ck_counts = triples_method(baskets, item_filter=frequent_items_set)
+        else:
+            for basket in baskets:
+                frequent_in_basket = [item for item in basket if frozenset([item]) in L1]
 
-            for candidate in combinations(sorted(frequent_in_basket), k):
-                subsets = [frozenset(candidate) - {item} for item in candidate]
-                if all(s in Lk_prev for s in subsets):
-                    key = frozenset(candidate)
-                    Ck_counts[key] = Ck_counts.get(key, 0) + 1
+                for candidate in combinations(sorted(frequent_in_basket), k):
+                    subsets = [frozenset(candidate) - {item} for item in candidate]
+                    if all(s in Lk_prev for s in subsets):
+                        key = frozenset(candidate)
+                        Ck_counts[key] = Ck_counts.get(key, 0) + 1
 
-        if verbose: print(f"=== PASS {k}: Candidate itemsets C{k} counts ===")
-        for itemset, count in sorted(Ck_counts.items(), key=lambda x: x[1], reverse=True):
-            print(f"  {set(itemset)}: {count}")
+        if verbose:
+            print(f"=== PASS {k}: Candidate itemsets C{k} counts ===")
+            for itemset, count in sorted(Ck_counts.items(), key=lambda x: x[1], reverse=True):
+                print(f"  {set(itemset)}: {count}")
 
         Lk = {itemset for itemset, count in Ck_counts.items() if count >= support_threshold}
 
@@ -101,7 +110,7 @@ def apriori(baskets, support_threshold, verbose=False):
         if verbose: print(f"  {[set(s) for s in Lk]}\n")
 
         if not Lk:
-            print(f"  No frequent {k}-itemsets found. Stopping.")
+            if verbose: print(f"  No frequent {k}-itemsets found. Stopping.")
             break
 
         for itemset in Lk:
@@ -177,16 +186,11 @@ def multihash_algorithm(
         for t in range(num_hash_tables)
     ]
 
-    # Pass 2: count candidate pairs
-    pair_counts = defaultdict(int)
-    for basket in baskets:
-        freq_in_basket = [item for item in basket if item in frequent_items]
-        for i in range(len(freq_in_basket)):
-            for j in range(i + 1, len(freq_in_basket)):
-                pair = frozenset({freq_in_basket[i], freq_in_basket[j]})
-                if all(frequent_buckets[t][hash_fns[t](pair)]
-                       for t in range(num_hash_tables)):
-                    pair_counts[pair] += 1
+    # Pass 2: count candidate pairs via triples_method
+    pair_filter = lambda pair: all(
+        frequent_buckets[t][hash_fns[t](pair)] for t in range(num_hash_tables)
+    )
+    pair_counts = triples_method(baskets, item_filter=frequent_items, pair_filter=pair_filter)
 
     frequent_pairs = {pair: cnt for pair, cnt in pair_counts.items()
                       if cnt >= support}
@@ -268,7 +272,7 @@ def son_algorithm(
             num_hash_tables=num_hash_tables,
             num_buckets=num_buckets,
         )
-        all_candidates |= local_frequent.keys()    # ← fix: .keys() not the dict itself
+        all_candidates |= local_frequent.keys()
 
     # PASS 2: count every candidate over the FULL dataset
     global_counts: dict[frozenset, int] = defaultdict(int)
@@ -303,23 +307,23 @@ def son_mapreduce(
     num_hash_tables:   int = 2,
     num_buckets:       int | None = None,
 ) -> dict:
- 
+
     n          = len(baskets)
     chunk_size = max(1, n // num_chunks)
     p          = chunk_size / n
- 
+
     local_support = max(1, int(math.floor(p * support_threshold)))
- 
+
     chunks = [
         baskets[i : i + chunk_size]
         for i in range(0, n, chunk_size)
     ]
- 
+
     # MapReduce Job 1
- 
+
     # PHASE 1 — MAP
     phase1_mapped: list[list[tuple[frozenset, int]]] = []
- 
+
     for chunk in chunks:
         if not chunk:
             continue
@@ -330,19 +334,19 @@ def son_mapreduce(
             num_buckets=num_buckets,
         )
         phase1_mapped.append([(itemset, 1) for itemset in local_frequent])
- 
+
     # PHASE 1 — REDUCE
     all_candidates: set[frozenset] = set()
- 
+
     for kv_pairs in phase1_mapped:
         for itemset, _ in kv_pairs:
             all_candidates.add(itemset)
- 
+
     # MapReduce Job 2
- 
+
     # PHASE 2 — MAP
     phase2_mapped: list[list[tuple[frozenset, int]]] = []
- 
+
     for chunk in chunks:
         local_counts: dict[frozenset, int] = defaultdict(int)
         for basket in chunk:
@@ -353,21 +357,21 @@ def son_mapreduce(
         phase2_mapped.append(
             [(candidate, count) for candidate, count in local_counts.items() if count > 0]
         )
- 
+
     # PHASE 2 — REDUCE
     global_counts: dict[frozenset, int] = defaultdict(int)
- 
+
     for kv_pairs in phase2_mapped:
         for candidate, count in kv_pairs:
             global_counts[candidate] += count
- 
+
     frequent_itemsets = {
         c for c, cnt in global_counts.items()
         if cnt >= support_threshold
     }
- 
+
     false_positives = all_candidates - frequent_itemsets
- 
+
     return {
         "frequent_itemsets" : frequent_itemsets,
         "candidates"        : all_candidates,
