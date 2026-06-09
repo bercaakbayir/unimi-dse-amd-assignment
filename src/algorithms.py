@@ -22,7 +22,8 @@ def triangular_matrix_method(baskets, item_filter=None):
     def get_index(i, j):
         if i > j:
             i, j = j, i
-        return int((i - 1) * (n - i / 2) + (j - i))
+        # formula: k = (i-1)(n - i/2) + (j-i)
+        return (i - 1) * n - i * (i - 1) // 2 + (j - i)
 
     for basket in baskets:
         indices = sorted([
@@ -91,9 +92,22 @@ def apriori(baskets, support_threshold, verbose=False):
             Ck_counts = triples_method(baskets, item_filter=frequent_items_set)
         else:
             for basket in baskets:
+                # Start with items in this basket that are frequent singletons
                 frequent_in_basket = [item for item in basket if frozenset([item]) in L1]
+                basket_set = set(frequent_in_basket)
 
-                for candidate in combinations(sorted(frequent_in_basket), k):
+                # Book (Example 6.8): eliminate any item that does not appear in
+                # at least two frequent (k-1)-itemsets that are subsets of this basket.
+                # Only items surviving this pruning can contribute to a frequent k-set.
+                eligible = [
+                    item for item in frequent_in_basket
+                    if sum(
+                        1 for s in Lk_prev
+                        if item in s and s <= basket_set
+                    ) >= 2
+                ]
+
+                for candidate in combinations(sorted(eligible), k):
                     subsets = [frozenset(candidate) - {item} for item in candidate]
                     if all(s in Lk_prev for s in subsets):
                         key = frozenset(candidate)
@@ -202,7 +216,7 @@ def multihash_algorithm(
 
     all_frequent.update(frequent_pairs)
 
-    # k≥3
+    # k>=3
     def generate_candidates(prev_frequent: dict[frozenset, int], k: int) -> set[frozenset]:
         candidates = set()
         prev_list  = list(prev_frequent.keys())
@@ -321,7 +335,7 @@ def son_mapreduce(
 
     # MapReduce Job 1
 
-    # PHASE 1 — MAP
+    # PHASE 1 - MAP
     phase1_mapped: list[list[tuple[frozenset, int]]] = []
 
     for chunk in chunks:
@@ -335,7 +349,7 @@ def son_mapreduce(
         )
         phase1_mapped.append([(itemset, 1) for itemset in local_frequent])
 
-    # PHASE 1 — REDUCE
+    # PHASE 1 - REDUCE
     all_candidates: set[frozenset] = set()
 
     for kv_pairs in phase1_mapped:
@@ -344,7 +358,7 @@ def son_mapreduce(
 
     # MapReduce Job 2
 
-    # PHASE 2 — MAP
+    # PHASE 2 - MAP
     phase2_mapped: list[list[tuple[frozenset, int]]] = []
 
     for chunk in chunks:
@@ -358,7 +372,7 @@ def son_mapreduce(
             [(candidate, count) for candidate, count in local_counts.items() if count > 0]
         )
 
-    # PHASE 2 — REDUCE
+    # PHASE 2 - REDUCE
     global_counts: dict[frozenset, int] = defaultdict(int)
 
     for kv_pairs in phase2_mapped:
