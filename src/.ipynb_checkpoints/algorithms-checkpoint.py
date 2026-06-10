@@ -6,7 +6,9 @@ import random
 from collections import defaultdict
 from typing import Iterable
 import itertools
+from concurrent.futures import ProcessPoolExecutor
 
+from src.helper import generate_association_rules
 
 def triangular_matrix_method(baskets, item_filter=None):
     all_items = sorted({
@@ -22,8 +24,6 @@ def triangular_matrix_method(baskets, item_filter=None):
     def get_index(i, j):
         if i > j:
             i, j = j, i
-        # Book formula: k = (i-1)(n - i/2) + (j-i)
-        # i*(i-1) is always even (consecutive integers), so integer division is exact.
         return (i - 1) * n - i * (i - 1) // 2 + (j - i)
 
     for basket in baskets:
@@ -134,7 +134,7 @@ def apriori(baskets, support_threshold, verbose=False):
         frequent_itemsets[k] = Lk
         k += 1
 
-    return support_counts
+    return generate_association_rules(support_counts, baskets)
 
 
 
@@ -254,7 +254,7 @@ def multihash_algorithm(
         prev_frequent_dict = new_frequent
         k += 1
 
-    return all_frequent
+    return all_frequent, generate_association_rules(all_frequent, baskets)
 
 
 def son_algorithm(
@@ -281,7 +281,7 @@ def son_algorithm(
     for chunk in chunks:
         if not chunk:
             continue
-        local_frequent = multihash_algorithm(
+        local_frequent, _ = multihash_algorithm(
             chunk,
             support=local_support,
             num_hash_tables=num_hash_tables,
@@ -305,15 +305,11 @@ def son_algorithm(
 
     false_positives = all_candidates - frequent_itemsets
 
-    return {
-        "frequent_itemsets" : frequent_itemsets,
-        "candidates"        : all_candidates,
-        "global_counts"     : dict(global_counts),
-        "false_positives"   : false_positives,
-        "num_chunks"        : len(chunks),
-        "local_support"     : local_support,
-    }
-
+    return generate_association_rules(
+        frequent_itemsets,
+        baskets,
+        global_counts=dict(global_counts),
+    )
 
 def son_mapreduce(
     baskets:           list[set],
@@ -323,75 +319,77 @@ def son_mapreduce(
     num_buckets:       int | None = None,
 ) -> dict:
 
-    n          = len(baskets)
-    chunk_size = max(1, n // num_chunks)
-    p          = chunk_size / n
+    import multiprocessing
 
-    local_support = max(1, int(math.floor(p * support_threshold)))
+    n             = len(baskets)
+    chunk_size    = max(1, n // num_chunks)
+    local_support = max(1, int(math.floor((chunk_size / n) * support_threshold)))
 
     chunks = [
         baskets[i : i + chunk_size]
         for i in range(0, n, chunk_size)
+        if baskets[i : i + chunk_size]
     ]
 
-    # MapReduce Job 1
+    ctx = multiprocessing.get_context("fork")
 
-    # PHASE 1 - MAP
-    phase1_mapped: list[list[tuple[frozenset, int]]] = []
+    def parallel_map(fn, items):
+        conns, procs = [], []
+        for item in items:
+            recv_conn, send_conn = ctx.Pipe(duplex=False)
 
-    for chunk in chunks:
-        if not chunk:
-            continue
-        local_frequent = multihash_algorithm(
+            def worker(conn=send_conn, x=item):
+                conn.send(fn(x))
+                conn.close()
+
+            p = ctx.Process(target=worker)
+            p.start()
+            send_conn.close()
+            conns.append(recv_conn)
+            procs.append(p)
+
+        results = [conn.recv() for conn in conns]
+        for p in procs:
+            p.join()
+        return results
+
+    def phase1_worker(chunk):
+        local_frequent, _ = multihash_algorithm(
             chunk,
             support=local_support,
             num_hash_tables=num_hash_tables,
             num_buckets=num_buckets,
         )
-        phase1_mapped.append([(itemset, 1) for itemset in local_frequent])
+        return [(itemset, 1) for itemset in local_frequent]
 
-    # PHASE 1 - REDUCE
-    all_candidates: set[frozenset] = set()
-
-    for kv_pairs in phase1_mapped:
-        for itemset, _ in kv_pairs:
-            all_candidates.add(itemset)
-
-    # MapReduce Job 2
-
-    # PHASE 2 - MAP
-    phase2_mapped: list[list[tuple[frozenset, int]]] = []
-
-    for chunk in chunks:
+    def phase2_worker(chunk):
         local_counts: dict[frozenset, int] = defaultdict(int)
         for basket in chunk:
             basket_set = frozenset(basket)
             for candidate in all_candidates:
                 if candidate <= basket_set:
                     local_counts[candidate] += 1
-        phase2_mapped.append(
-            [(candidate, count) for candidate, count in local_counts.items() if count > 0]
-        )
+        return [(c, cnt) for c, cnt in local_counts.items() if cnt > 0]
 
-    # PHASE 2 - REDUCE
+    # MapReduce Job 1
+    phase1_mapped = parallel_map(phase1_worker, chunks)
+
+    all_candidates: set[frozenset] = {
+        itemset for kv_pairs in phase1_mapped for itemset, _ in kv_pairs
+    }
+
+    # MapReduce Job 2
+    phase2_mapped = parallel_map(phase2_worker, chunks)
+
     global_counts: dict[frozenset, int] = defaultdict(int)
-
     for kv_pairs in phase2_mapped:
         for candidate, count in kv_pairs:
             global_counts[candidate] += count
 
-    frequent_itemsets = {
-        c for c, cnt in global_counts.items()
-        if cnt >= support_threshold
-    }
+    frequent_itemsets = {c for c, cnt in global_counts.items() if cnt >= support_threshold}
 
-    false_positives = all_candidates - frequent_itemsets
-
-    return {
-        "frequent_itemsets" : frequent_itemsets,
-        "candidates"        : all_candidates,
-        "global_counts"     : dict(global_counts),
-        "false_positives"   : false_positives,
-        "num_chunks"        : len(chunks),
-        "local_support"     : local_support,
-    }
+    return generate_association_rules(
+        frequent_itemsets,
+        baskets,
+        global_counts=dict(global_counts),
+    )

@@ -3,6 +3,8 @@ import pandas as pd
 from pathlib import Path
 import zipfile
 from collections import defaultdict
+from itertools import combinations
+
 
 def kaggle_data_handler(kaggle_url, csv_index=0):
     match = re.search(r"kaggle\.com/datasets/([^/]+)/([^/?#]+)", kaggle_url)
@@ -12,7 +14,7 @@ def kaggle_data_handler(kaggle_url, csv_index=0):
     owner, slug = match.group(1), match.group(2)
 
     try:
-        download_dir = Path(__file__).parent / "data"
+        download_dir = Path(__file__).parent.parent / "data"
     except NameError:
         download_dir = Path.cwd() / "data"
 
@@ -44,7 +46,11 @@ def print_results(result: dict, top_n: int = 20) -> None:
     print("=" * 60)
     print("Results")
     print("=" * 60)
-    print(f"  Chunks used : {result['num_chunks']}")
+    effective = result.get("effective_chunks", result["num_chunks"])
+    if effective < result["num_chunks"]:
+        print(f"  Chunks used : {effective} (capped from {result['num_chunks']} — support too low)")
+    else:
+        print(f"  Chunks used : {result['num_chunks']}")
     print(f"  Local support : {result['local_support']}")
     print(f"  Candidate itemsets : {len(cands)}")
     print(f"  False positives : {len(fp)}  (eliminated in pass 2)")
@@ -72,38 +78,106 @@ def print_results(result: dict, top_n: int = 20) -> None:
         
         
         
+
+
+def support(itemset, baskets) -> float:
+    """Fraction of baskets that contain every item in itemset."""
+    itemset = frozenset(itemset)
+    return sum(1 for b in baskets if itemset.issubset(b)) / len(baskets)
+
+
+
+def confidence(lhs, rhs, baskets, verbose=False) -> float | None:
+    """P(lhs ∪ rhs) / P(lhs)."""
+    lhs, rhs = frozenset(lhs), frozenset(rhs)
+    sup_lhs   = sum(1 for b in baskets if lhs.issubset(b))
+    sup_union = sum(1 for b in baskets if (lhs | rhs).issubset(b))
+
+    if sup_lhs == 0:
+        return None
+
+    conf = sup_union / sup_lhs
+
+    if verbose:
+        print(f"  support({set(lhs)})          = {sup_lhs}")
+        print(f"  support({set(lhs | rhs)})    = {sup_union}")
+        print(f"  confidence({set(lhs)} → {set(rhs)}) "
+              f"= {sup_union}/{sup_lhs} = {conf:.4f}")
+    return conf
+
+
+
+def interest(lhs, rhs, baskets, verbose=False) -> float | None:
+    """confidence(lhs → rhs) − P(rhs)."""
+    rhs  = frozenset(rhs)
+    conf = confidence(lhs, rhs, baskets, verbose=verbose)
+
+    if conf is None:
+        return None
+
+    sup_rhs  = sum(1 for b in baskets if rhs.issubset(b))
+    prob_rhs = sup_rhs / len(baskets)
+    score    = conf - prob_rhs
+
+    if verbose:
+        print(f"  P({set(rhs)})"
+              f"= {sup_rhs}/{len(baskets)} = {prob_rhs:.4f}")
+        print(f"  interest({set(lhs)} → {set(rhs)}) "
+              f"= {conf:.4f} - {prob_rhs:.4f} = {score:.4f}")
+    return score
+
+
+
 def generate_association_rules(
     frequent_itemsets,          
+    baskets,                    
     global_counts=None,         
-) -> pd.DataFrame:
+    min_confidence: float = 0.0,
+    min_interest:   float | None = None) -> pd.DataFrame:
     
     if isinstance(frequent_itemsets, dict):
-        counts = frequent_itemsets
         itemsets = set(frequent_itemsets.keys())
     else:
         if global_counts is None:
-            raise ValueError("global_counts must be provided when frequent_itemsets is a set")
-        counts = global_counts
+            raise ValueError(
+                "global_counts must be provided when frequent_itemsets is a set"
+            )
         itemsets = set(frequent_itemsets)
 
-    rules = []
+    n = len(baskets)
+    rows = []
+
     for itemset in itemsets:
         if len(itemset) < 2:
             continue
+
+        # Every single-item consequent derived from this itemset
         for item in itemset:
             rhs = frozenset([item])
             lhs = itemset - rhs
-            if lhs not in counts:
+
+            conf = confidence(lhs, rhs, baskets)
+            if conf is None or conf < min_confidence:
                 continue
-            support = counts[itemset]
-            confidence = support / counts[lhs]
-            rules.append({
+
+            sup   = support(itemset, baskets)
+            score = interest(lhs, rhs, baskets)
+
+            if min_interest is not None and (score is None or score < min_interest):
+                continue
+
+            rows.append({
                 "antecedents": set(lhs),
                 "consequents": set(rhs),
-                "support":     support,
-                "confidence":  round(confidence * 100, 2),
+                "support":     round(sup * n),
+                "confidence":  round(conf * 100, 2), 
+                "interest":    round(score, 4) if score is not None else None,
             })
 
-    df = pd.DataFrame(rules, columns=["antecedents", "consequents", "support", "confidence"])
-    df = df.sort_values("confidence", ascending=False).reset_index(drop=True)
+    df = (
+        pd.DataFrame(rows, columns=["antecedents", "consequents",
+                                    "support", "confidence", "interest"])
+        .sort_values("confidence", ascending=False)
+        .reset_index(drop=True)
+    )
     return df
